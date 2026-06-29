@@ -96,7 +96,7 @@
   .field input[type=text],.field input[type=url],.field input[type=password],.field textarea,.field select{
     width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--surface);outline:none;transition:.15s}
   .field input:focus,.field textarea:focus,.field select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-tint)}
-  .field textarea{resize:vertical;min-height:84px;line-height:1.55}
+  .field textarea{resize:none;overflow:hidden;min-height:84px;line-height:1.55}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 
   /* image picker (다중 업로드) */
@@ -488,7 +488,7 @@ async function removeService(id){
 }
 
 /* ============ Form ============ */
-function openForm(){editingId=null;currentImages=[];document.getElementById('formTitle').textContent='서비스 추가';clearForm();show('formOverlay');setTimeout(()=>document.getElementById('fCompany').focus(),50)}
+function openForm(){editingId=null;currentImages=[];document.getElementById('formTitle').textContent='서비스 추가';clearForm();show('formOverlay');growAll();setTimeout(()=>document.getElementById('fCompany').focus(),50)}
 function editService(id){
   const s=services.find(x=>x.id===id);if(!s)return;
   editingId=id;currentImages=imgList(s).slice();
@@ -496,11 +496,13 @@ function editService(id){
   setVal('fCompany',s.company);setVal('fUrl',s.url);setVal('fImgUrl','');
   setVal('fMemo',s.memo);setVal('fOne',s.oneLiner);setVal('fSummary',s.summary);setVal('fCategory',s.category);
   setVal('fTags',(s.tags||[]).join(', '));setVal('fPoints',(s.keyPoints||[]).join('\n'));
-  renderImgPreview();close('detailOverlay');show('formOverlay');
+  renderImgPreview();close('detailOverlay');show('formOverlay');growAll();
 }
 function clearForm(){['fCompany','fUrl','fImgUrl','fMemo','fOne','fSummary','fCategory','fTags','fPoints'].forEach(id=>setVal(id,''));renderImgPreview()}
-function setVal(id,v){document.getElementById(id).value=v||''}
+function setVal(id,v){const el=document.getElementById(id);el.value=v||'';if(el.tagName==='TEXTAREA')autoGrow(el)}
 function getVal(id){return document.getElementById(id).value.trim()}
+function autoGrow(el){if(!el)return;el.style.height='auto';const border=el.offsetHeight-el.clientHeight;el.style.height=(el.scrollHeight+border)+'px'}
+function growAll(){['fMemo','fSummary','fPoints'].forEach(id=>autoGrow(document.getElementById(id)))}
 
 function renderImgPreview(){
   const row=document.getElementById('imgRow');if(!row)return;
@@ -646,6 +648,7 @@ async function analyze(){
     if(Array.isArray(j.tags))setVal('fTags',j.tags.join(', '));
     if(Array.isArray(j.keyPoints))setVal('fPoints',j.keyPoints.join('\n'));
     document.querySelector('#formOverlay details').open=true;
+    growAll();
     toast('AI 분석 완료 ✨');
   }catch(e){
     console.error(e);
@@ -723,6 +726,8 @@ document.getElementById('fImgUrl').addEventListener('keydown',e=>{
   else if(u){toast('http(s) 이미지 URL을 입력해 주세요',true)}
 });
 document.getElementById('search').oninput=e=>{query=e.target.value;render()};
+['fMemo','fSummary','fPoints'].forEach(id=>document.getElementById(id).addEventListener('input',e=>autoGrow(e.target)));
+document.querySelector('#formOverlay details').addEventListener('toggle',e=>{if(e.target.open)growAll()});
 
 setupDropZone();
 render();
