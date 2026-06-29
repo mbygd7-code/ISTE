@@ -7,13 +7,10 @@
 ## 시작하기
 
 1. **링크 접속**(또는 `index.html` 더블클릭) — 모든 직원이 같은 목록을 봅니다.
-2. 우측 상단 **⚙️ 설정**에서:
-   - **내 이름** — 카드에 '추가한 사람'으로 표시됩니다.
-   - **Claude API 키** — AI 자동 요약에 사용됩니다. ([키 발급](https://console.anthropic.com/settings/keys))
-   - **AI 모델** — Sonnet 4.6(권장) / Haiku 4.5(빠름·저렴) / Opus 4.8(최고 품질)
+2. 우측 상단 **⚙️ 설정**에서 **내 이름**(카드에 '추가한 사람'으로 표시)과 **AI 모델**을 고릅니다.
 3. **＋ 서비스 추가** → 이미지/URL/메모 입력 → **AI 분석** → 저장
 
-> API 키는 **각자 브라우저에만** 저장되며 외부로 전송·수집되지 않습니다.
+> 🤖 AI 요약은 **공용 키로 서버에서 처리**되므로 직원들은 **API 키를 입력할 필요가 없습니다.** 바로 사용하세요.
 
 ## 직원들과 공유하기 — 실시간 공용 카탈로그
 
@@ -37,7 +34,8 @@
 
 | 파일 | 설명 |
 |------|------|
-| `index.html` | **앱 본체** (이 파일 하나면 됩니다) |
+| `index.html` | **앱 본체** (UI·Supabase·AI 호출) |
+| `api/analyze.js` | AI 프록시 (Vercel 서버리스 함수, 키 숨김) |
 | `README.md` | 이 문서 |
 | `server.cjs`, `.claude/launch.json` | 미리보기용 로컬 서버 (선택) |
 
@@ -45,7 +43,9 @@
 
 - **프런트엔드**: 단일 `index.html` (프레임워크 없음)
 - **DB / 실시간**: Supabase (`services` 테이블, `postgres_changes` 구독)
-- **AI**: Claude API 브라우저 직접 호출 (각자 키)
-- **배포**: Vercel (정적). 코드 수정 후 `vercel deploy --prod`로 갱신
+- **AI**: `api/analyze.js` (Vercel 서버리스 함수)가 Claude를 대신 호출 — 키는 서버에만
+- **배포**: Vercel. 코드 수정 후 `vercel deploy --prod`로 갱신
 
-> Supabase 연결값(URL·anon key)은 `index.html` 상단 `SUPABASE_URL`/`SUPABASE_ANON_KEY`에 있습니다. anon key는 공개되어도 안전한 클라이언트용 키입니다.
+> **비밀 키 위치**
+> - `ANTHROPIC_API_KEY` → Vercel 환경변수(Production). 코드·깃·브라우저에 노출 안 됨. AI 요금은 이 키 하나로 통합 청구.
+> - Supabase `anon key`는 `index.html` 상단에 있으나 공개돼도 안전한 클라이언트용 키입니다.
