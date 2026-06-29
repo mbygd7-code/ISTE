@@ -307,12 +307,19 @@
 <input type="file" id="importFile" accept="application/json" hidden />
 <div class="toast-wrap" id="toasts"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-/* ============ Storage ============ */
-const LS_SVC='exposcan.services.v1', LS_SET='exposcan.settings.v1';
+/* ============ Supabase (공용 데이터 — 모두가 같은 목록 공유) ============ */
+const SUPABASE_URL='https://ucpaojsksqcoqbjlpoog.supabase.co';
+const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVjcGFvanNrc3Fjb3Fiamxwb29nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI3NDg0NzQsImV4cCI6MjA5ODMyNDQ3NH0.9wzfcprc-EfThO6S5qFR0ERR9k0EOc7BPJ30QrqrJjk';
+const CONFIGURED=/^https?:\/\//.test(SUPABASE_URL)&&SUPABASE_ANON_KEY.length>20;
+const sb=(CONFIGURED&&window.supabase)?window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
+
+/* ============ Storage (설정은 각 브라우저에 저장) ============ */
+const LS_SET='exposcan.settings.v1';
 const PALETTE=['#6366F1','#8B5CF6','#EC4899','#F59E0B','#10B981','#06B6D4','#EF4444','#3B82F6','#14B8A6','#F97316'];
 
-let services=load(LS_SVC,[]);
+let services=[];
 let settings=load(LS_SET,{name:'',apiKey:'',model:'claude-sonnet-4-6'});
 let activeTag=null, query='', editingId=null, currentImage='';
 
@@ -326,6 +333,40 @@ function fmtDate(iso){if(!iso)return'';const d=new Date(iso);return `${d.getFull
 
 /* ============ Toast ============ */
 function toast(msg,err){const el=document.createElement('div');el.className='toast'+(err?' err':'');el.textContent=msg;document.getElementById('toasts').appendChild(el);setTimeout(()=>{el.style.transition='.3s';el.style.opacity='0';el.style.transform='translateY(6px)';setTimeout(()=>el.remove(),300)},err?3400:2200)}
+
+/* ============ Supabase 데이터 계층 ============ */
+async function dbFetch(){
+  const {data,error}=await sb.from('services').select('id,data,updated_at').order('updated_at',{ascending:false});
+  if(error)throw error;
+  return (data||[]).map(r=>({...r.data,id:r.id}));
+}
+async function dbUpsert(s){
+  const {id,...rest}=s;
+  const {error}=await sb.from('services').upsert({id,data:rest,updated_at:s.updatedAt||new Date().toISOString()});
+  if(error)throw error;
+}
+async function dbDelete(id){
+  const {error}=await sb.from('services').delete().eq('id',id);
+  if(error)throw error;
+}
+async function refresh(){
+  if(!sb)return;
+  try{services=await dbFetch();render()}
+  catch(e){console.error(e);toast('목록을 불러오지 못했어요: '+(e.message||e),true)}
+}
+function subscribeRealtime(){
+  if(!sb)return;
+  sb.channel('services-realtime')
+    .on('postgres_changes',{event:'*',schema:'public',table:'services'},()=>refresh())
+    .subscribe();
+}
+function showConfigBanner(){
+  const w=document.querySelector('main.wrap');if(!w)return;
+  const b=document.createElement('div');
+  b.style.cssText='background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:12px 16px;border-radius:10px;margin-bottom:16px;font-size:13px;font-weight:600';
+  b.textContent='⚠️ Supabase가 아직 연결되지 않았습니다. 연결이 끝나면 링크 접속만으로 모두가 같은 목록을 공유합니다.';
+  w.insertBefore(b,w.firstChild);
+}
 
 /* ============ Render ============ */
 function allTags(){const set=new Set();services.forEach(s=>(s.tags||[]).forEach(t=>set.add(t)));return [...set].sort()}
@@ -415,10 +456,14 @@ function openDetail(id){
   show('detailOverlay');
 }
 
-function removeService(id){
+async function removeService(id){
+  if(!sb){toast('Supabase가 연결되지 않았습니다',true);return}
   if(!confirm('이 서비스를 삭제할까요?'))return;
-  services=services.filter(s=>s.id!==id);save(LS_SVC,services);
-  close('detailOverlay');render();toast('삭제되었습니다');
+  try{
+    await dbDelete(id);
+    services=services.filter(s=>s.id!==id);
+    close('detailOverlay');render();toast('삭제되었습니다');
+  }catch(e){toast('삭제 실패: '+(e.message||e),true)}
 }
 
 /* ============ Form ============ */
@@ -488,7 +533,8 @@ function setupDropZone(){
   window.addEventListener('drop',e=>{if(dtHasDraggable(e))e.preventDefault()});
 }
 
-function saveService(){
+async function saveService(){
+  if(!sb){toast('Supabase가 연결되지 않았습니다',true);return}
   const company=getVal('fCompany');
   const image=currentImage||getVal('fImgUrl');
   const tags=getVal('fTags').split(',').map(t=>t.trim()).filter(Boolean);
@@ -497,15 +543,23 @@ function saveService(){
   const now=new Date().toISOString();
   const data={company,url:getVal('fUrl'),image,memo:getVal('fMemo'),oneLiner:getVal('fOne'),
     summary:getVal('fSummary'),category:getVal('fCategory'),tags,keyPoints};
-  if(editingId){
-    const i=services.findIndex(s=>s.id===editingId);
-    services[i]={...services[i],...data,updatedAt:now};
-    toast('수정되었습니다');
+  const wasEditing=!!editingId;
+  let svc;
+  if(wasEditing){
+    const cur=services.find(s=>s.id===editingId)||{};
+    svc={...cur,...data,id:editingId,updatedAt:now};
   }else{
-    services.unshift({id:uid(),...data,addedBy:settings.name||'',createdAt:now,updatedAt:now});
-    toast('추가되었습니다');
+    svc={id:uid(),...data,addedBy:settings.name||'',createdAt:now,updatedAt:now};
   }
-  save(LS_SVC,services);close('formOverlay');render();
+  const btn=document.getElementById('btnSave');btn.disabled=true;
+  try{
+    await dbUpsert(svc);
+    const i=services.findIndex(s=>s.id===svc.id);
+    if(i>=0)services[i]=svc;else services.unshift(svc);
+    close('formOverlay');render();
+    toast(wasEditing?'수정되었습니다':'추가되었습니다');
+  }catch(e){toast('저장 실패: '+(e.message||e),true)}
+  finally{btn.disabled=false}
 }
 
 /* ============ Claude AI ============ */
@@ -593,22 +647,21 @@ function exportJSON(){
   toast(`${services.length}개 서비스를 내보냈어요`);
 }
 function importJSON(file){
+  if(!sb){toast('Supabase가 연결되지 않았습니다',true);return}
   const r=new FileReader();
-  r.onload=e=>{
+  r.onload=async e=>{
     try{
       const arr=JSON.parse(e.target.result);
       if(!Array.isArray(arr))throw 0;
-      const map=new Map(services.map(s=>[s.id,s]));
-      let added=0,merged=0;
-      arr.forEach(it=>{
-        if(!it||!it.id){it={...it,id:uid()}}
-        const ex=map.get(it.id);
-        if(!ex){map.set(it.id,it);added++}
-        else if((it.updatedAt||'')>(ex.updatedAt||'')){map.set(it.id,it);merged++}
-      });
-      services=[...map.values()];save(LS_SVC,services);render();
-      toast(`가져오기 완료 — 신규 ${added}개${merged?`, 갱신 ${merged}개`:''}`);
-    }catch(err){toast('올바른 ExpoScan JSON 파일이 아니에요',true)}
+      let n=0;
+      for(const it of arr){
+        if(!it||typeof it!=='object')continue;
+        const s={...it,id:it.id||uid(),updatedAt:it.updatedAt||new Date().toISOString()};
+        await dbUpsert(s);n++;
+      }
+      await refresh();
+      toast(`가져오기 완료 — ${n}개를 공용 목록에 반영했어요`);
+    }catch(err){toast('가져오기 실패: 올바른 JSON인지 확인해 주세요',true)}
   };
   r.readAsText(file);
 }
@@ -642,7 +695,8 @@ document.getElementById('search').oninput=e=>{query=e.target.value;render()};
 
 setupDropZone();
 render();
-if(!settings.apiKey&&!services.length){/* first run hint shown in empty state */}
+if(CONFIGURED){refresh();subscribeRealtime();}
+else{showConfigBanner();}
 </script>
 </body>
 </html>
