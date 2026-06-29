@@ -112,6 +112,11 @@
   .d-gallery{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
   .d-gallery img{width:74px;height:74px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:pointer;transition:.12s}
   .d-gallery img:hover{transform:scale(1.04);border-color:var(--accent)}
+  .lightbox{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.9);display:none;align-items:center;justify-content:center;padding:32px;cursor:zoom-out}
+  .lightbox.open{display:flex;animation:pop .15s ease}
+  .lightbox img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;box-shadow:0 10px 50px rgba(0,0,0,.6)}
+  .lightbox .lb-x{position:fixed;top:18px;right:22px;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.15);color:#fff;font-size:18px;display:grid;place-items:center;cursor:pointer;border:none}
+  .lightbox .lb-x:hover{background:rgba(255,255,255,.28)}
 
   .ai-bar{display:flex;align-items:center;gap:10px;padding:12px 14px;background:linear-gradient(90deg,var(--accent-tint),#F5F3FF);border:1px solid #E0E0FB;border-radius:var(--radius-sm);margin-bottom:18px}
   .ai-bar .txt{flex:1;font-size:12.5px;color:#4338CA;font-weight:500;line-height:1.4}
@@ -318,6 +323,7 @@ let services=[];
 let settings=load(LS_SET,{name:'',model:'claude-sonnet-4-6'});
 let activeTag=null, query='', editingId=null, currentImages=[];
 function imgList(s){return (s&&s.images&&s.images.length)?s.images:((s&&s.image)?[s.image]:[])}
+function normUrl(u){u=(u||'').trim();if(!u)return '';return /^https?:\/\//i.test(u)?u:'https://'+u.replace(/^\/+/,'')}
 
 function load(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}}
 function save(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){toast('저장 공간이 부족합니다. 이미지 수를 줄여보세요.',true);return false}}
@@ -432,12 +438,12 @@ function openDetail(id){
   const list=imgList(s);
   const img=list[0]?`<img src="${esc(list[0])}" alt="">`
     :`<div class="d-ph" style="background:${colorFor(s.company)}">${esc(initial(s.company))}</div>`;
-  const gallery=list.length>1?`<div class="d-gallery">${list.map(u=>`<a href="${esc(u)}" target="_blank"><img src="${esc(u)}" alt=""></a>`).join('')}</div>`:'';
+  const gallery=list.length>1?`<div class="d-gallery">${list.map(u=>`<img src="${esc(u)}" alt="">`).join('')}</div>`:'';
   const points=(s.keyPoints||[]).length?`<div class="d-sect"><h4>핵심 포인트</h4><ul class="d-points">${s.keyPoints.map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`:'';
   const tags=(s.tags||[]).length?`<div class="d-sect"><h4>태그</h4><div class="d-tags">${s.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div></div>`:'';
   const summary=s.summary?`<div class="d-sect"><h4>요약</h4><p>${esc(s.summary)}</p></div>`:'';
   const memo=s.memo?`<div class="d-sect"><h4>원본 메모</h4><p>${esc(s.memo)}</p></div>`:'';
-  const link=s.url?`<a class="d-link" href="${esc(s.url)}" target="_blank">사이트 방문 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M9 7h8v8"/></svg></a>`:'';
+  const link=s.url?`<a class="d-link" href="${esc(normUrl(s.url))}" target="_blank" rel="noopener noreferrer">사이트 방문 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M9 7h8v8"/></svg></a>`:'';
   document.getElementById('detailContent').innerHTML=`
     <div class="d-hero">${img}</div>
     <div class="d-body">
@@ -454,7 +460,21 @@ function openDetail(id){
         <button class="btn btn-danger" style="height:32px" onclick="removeService('${s.id}')">삭제</button>
       </div>
     </div>`;
+  document.querySelectorAll('#detailContent .d-hero img, #detailContent .d-gallery img')
+    .forEach(im=>{im.style.cursor='zoom-in';im.onclick=()=>openLightbox(im.src)});
   show('detailOverlay');
+}
+
+function openLightbox(src){
+  let lb=document.getElementById('lightbox');
+  if(!lb){
+    lb=document.createElement('div');lb.id='lightbox';lb.className='lightbox';
+    lb.innerHTML='<img alt=""><button class="lb-x" aria-label="닫기">✕</button>';
+    document.body.appendChild(lb);
+    lb.onclick=()=>lb.classList.remove('open');
+  }
+  lb.querySelector('img').src=src;
+  lb.classList.add('open');
 }
 
 async function removeService(id){
@@ -685,7 +705,7 @@ function show(id){document.getElementById(id).classList.add('open')}
 function close(id){document.getElementById(id).classList.remove('open')}
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>close(b.dataset.close));
 document.querySelectorAll('.overlay').forEach(o=>o.addEventListener('mousedown',e=>{if(e.target===o)close(o.id)}));
-document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.overlay.open').forEach(o=>close(o.id))});
+document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;const lb=document.getElementById('lightbox');if(lb&&lb.classList.contains('open')){lb.classList.remove('open');return}document.querySelectorAll('.overlay.open').forEach(o=>close(o.id))});
 
 /* ============ Wire up ============ */
 document.getElementById('btnAdd').onclick=openForm;
