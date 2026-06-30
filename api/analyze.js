@@ -2,6 +2,9 @@
 // 브라우저는 키 없이 /api/analyze 만 호출 → 키가 외부에 노출되지 않습니다.
 // 키는 Vercel 환경변수 ANTHROPIC_API_KEY 에 저장됩니다 (코드/깃에 포함 안 됨).
 
+// 기본 10초 제한에서 잘려 "다운"되는 것을 방지 (이미지 분석은 더 오래 걸릴 수 있음)
+export const config = { maxDuration: 60 };
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });

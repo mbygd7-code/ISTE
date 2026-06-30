@@ -80,6 +80,7 @@
   /* ---------- Modal ---------- */
   .overlay{position:fixed;inset:0;z-index:50;background:rgba(24,24,27,.42);backdrop-filter:blur(2px);display:none;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto}
   .overlay.open{display:flex}
+  body.modal-open{overflow:hidden}
   .modal{background:var(--surface);border-radius:18px;width:100%;max-width:580px;box-shadow:var(--shadow-md);animation:pop .18s ease;margin:auto}
   .modal.wide{max-width:680px}
   @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
@@ -124,6 +125,12 @@
   .spin{width:15px;height:15px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;animation:rot .7s linear infinite;display:inline-block}
   @keyframes rot{to{transform:rotate(360deg)}}
 
+  /* ---------- Top loading bar (저장/불러오기 진행 표시) ---------- */
+  .toploader{position:fixed;top:0;left:0;height:3px;width:0;background:linear-gradient(90deg,var(--accent),#8B5CF6);z-index:300;opacity:0;border-radius:0 3px 3px 0;box-shadow:0 0 10px rgba(79,70,229,.55);transition:width .2s ease,opacity .3s ease}
+  .toploader.active{opacity:1}
+  .loading{text-align:center;padding:80px 24px;color:var(--muted);font-size:14px;font-weight:500}
+  .loading .ld-spin{width:28px;height:28px;border:3px solid var(--border-2);border-top-color:var(--accent);border-radius:50%;animation:rot .7s linear infinite;margin:0 auto 14px}
+
   /* ---------- Detail ---------- */
   .d-hero{height:200px;background:var(--bg);position:relative}
   .d-hero img{width:100%;height:100%;object-fit:cover}
@@ -162,6 +169,8 @@
 </style>
 </head>
 <body>
+
+<div class="toploader" id="toploader"></div>
 
 <!-- TOP BAR -->
 <header class="topbar">
@@ -320,7 +329,10 @@ const LS_SET='exposcan.settings.v1';
 const PALETTE=['#6366F1','#8B5CF6','#EC4899','#F59E0B','#10B981','#06B6D4','#EF4444','#3B82F6','#14B8A6','#F97316'];
 
 let services=[];
-let settings=load(LS_SET,{name:'',model:'claude-sonnet-4-6'});
+const DEFAULT_MODEL='claude-sonnet-4-6';
+let settings=load(LS_SET,{name:'',model:DEFAULT_MODEL});
+// 분석 속도·안정성을 위해 무거운(Opus) 모델은 Sonnet 4.6으로 자동 조정
+if(!settings.model||/opus/i.test(settings.model)){settings.model=DEFAULT_MODEL;save(LS_SET,settings)}
 let activeTag=null, query='', editingId=null, currentImages=[];
 function imgList(s){return (s&&s.images&&s.images.length)?s.images:((s&&s.image)?[s.image]:[])}
 function normUrl(u){u=(u||'').trim();if(!u)return '';return /^https?:\/\//i.test(u)?u:'https://'+u.replace(/^\/+/,'')}
@@ -335,6 +347,25 @@ function fmtDate(iso){if(!iso)return'';const d=new Date(iso);return `${d.getFull
 
 /* ============ Toast ============ */
 function toast(msg,err){const el=document.createElement('div');el.className='toast'+(err?' err':'');el.textContent=msg;document.getElementById('toasts').appendChild(el);setTimeout(()=>{el.style.transition='.3s';el.style.opacity='0';el.style.transform='translateY(6px)';setTimeout(()=>el.remove(),300)},err?3400:2200)}
+
+/* ============ Top loading bar ============ */
+let _loadTimer=null,_loadCount=0;
+function startLoading(){
+  _loadCount++;
+  const b=document.getElementById('toploader');if(!b)return;
+  clearInterval(_loadTimer);
+  b.classList.add('active');
+  let w=10;b.style.width=w+'%';
+  _loadTimer=setInterval(()=>{w=Math.min(w+Math.random()*12,90);b.style.width=w+'%'},220);
+}
+function stopLoading(){
+  _loadCount=Math.max(0,_loadCount-1);
+  if(_loadCount>0)return;
+  const b=document.getElementById('toploader');if(!b)return;
+  clearInterval(_loadTimer);
+  b.style.width='100%';
+  setTimeout(()=>{b.classList.remove('active');b.style.width='0'},300);
+}
 
 /* ============ Supabase 데이터 계층 ============ */
 async function dbFetch(){
@@ -351,10 +382,19 @@ async function dbDelete(id){
   const {error}=await sb.from('services').delete().eq('id',id);
   if(error)throw error;
 }
-async function refresh(){
+async function refresh(opts){
   if(!sb)return;
+  const bar=opts&&opts.bar;
+  if(bar){
+    startLoading();
+    if(!services.length){
+      const c=document.getElementById('content');
+      if(c)c.innerHTML='<div class="loading"><div class="ld-spin"></div>서비스를 불러오는 중…</div>';
+    }
+  }
   try{services=await dbFetch();render()}
   catch(e){console.error(e);toast('목록을 불러오지 못했어요: '+(e.message||e),true)}
+  finally{if(bar)stopLoading()}
 }
 function subscribeRealtime(){
   if(!sb)return;
@@ -580,15 +620,22 @@ async function saveService(){
   }else{
     svc={id:uid(),...data,addedBy:settings.name||'',createdAt:now,updatedAt:now};
   }
-  const btn=document.getElementById('btnSave');btn.disabled=true;
-  try{
-    await dbUpsert(svc);
-    const i=services.findIndex(s=>s.id===svc.id);
-    if(i>=0)services[i]=svc;else services.unshift(svc);
-    close('formOverlay');render();
+  // 낙관적 업데이트: 화면에 먼저 반영해 즉시 닫고, 저장은 백그라운드에서 마무리
+  const i=services.findIndex(s=>s.id===svc.id);
+  const prev=i>=0?services[i]:null;
+  if(i>=0)services[i]=svc;else services.unshift(svc);
+  close('formOverlay');render();
+  startLoading();
+  dbUpsert(svc).then(()=>{
     toast(wasEditing?'수정되었습니다':'추가되었습니다');
-  }catch(e){toast('저장 실패: '+(e.message||e),true)}
-  finally{btn.disabled=false}
+  }).catch(e=>{
+    // 실패 시 화면 변경을 되돌림
+    const j=services.findIndex(s=>s.id===svc.id);
+    if(prev){if(j>=0)services[j]=prev;else services.unshift(prev)}
+    else if(j>=0)services.splice(j,1);
+    render();
+    toast('저장 실패 — 변경을 되돌렸어요: '+(e.message||e),true);
+  }).finally(()=>stopLoading());
 }
 
 /* ============ Claude AI ============ */
@@ -628,12 +675,16 @@ async function analyze(){
     }
   }
 
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),60000);
   try{
     const r=await fetch('/api/analyze',{
       method:'POST',
       headers:{'content-type':'application/json'},
-      body:JSON.stringify({model:settings.model||'claude-sonnet-4-6',max_tokens:1500,messages:[{role:'user',content}]})
+      body:JSON.stringify({model:settings.model||DEFAULT_MODEL,max_tokens:1500,messages:[{role:'user',content}]}),
+      signal:ctrl.signal
     });
+    clearTimeout(timer);
     const data=await r.json();
     if(!r.ok){throw new Error('('+r.status+') '+((data&&data.error)||'요청 실패'))}
     const out=(data.content||[]).map(c=>c.text||'').join('');
@@ -653,11 +704,12 @@ async function analyze(){
   }catch(e){
     console.error(e);
     let m=e.message||'분석 실패';
-    if(/401|authentication|ANTHROPIC_API_KEY/i.test(m))m='서버 API 키 설정에 문제가 있어요. 관리자에게 문의해 주세요.';
+    if(e.name==='AbortError')m='분석이 너무 오래 걸려요. 이미지 수를 줄이거나 잠시 후 다시 시도해 주세요.';
+    else if(/401|authentication|ANTHROPIC_API_KEY/i.test(m))m='서버 API 키 설정에 문제가 있어요. 관리자에게 문의해 주세요.';
     else if(/429/.test(m))m='요청이 많아요. 잠시 후 다시 시도해 주세요.';
     else if(/Failed to fetch|NetworkError/i.test(m))m='네트워크 오류 — 인터넷 연결을 확인해 주세요.';
     toast(m,true);
-  }finally{btn.disabled=false;lbl.textContent='AI 분석'}
+  }finally{clearTimeout(timer);btn.disabled=false;lbl.textContent='AI 분석'}
 }
 function parseJSON(t){
   if(!t)return null;
@@ -704,10 +756,12 @@ function saveSettings(){
 }
 
 /* ============ Modal helpers ============ */
-function show(id){document.getElementById(id).classList.add('open')}
-function close(id){document.getElementById(id).classList.remove('open')}
+function syncBodyLock(){document.body.classList.toggle('modal-open',!!document.querySelector('.overlay.open'))}
+function show(id){document.getElementById(id).classList.add('open');syncBodyLock()}
+function close(id){document.getElementById(id).classList.remove('open');syncBodyLock()}
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>close(b.dataset.close));
-document.querySelectorAll('.overlay').forEach(o=>o.addEventListener('mousedown',e=>{if(e.target===o)close(o.id)}));
+// 배경 클릭으로 닫기 — 편집/추가 폼은 실수로 닫혀 입력이 사라지지 않도록 제외
+document.querySelectorAll('.overlay').forEach(o=>o.addEventListener('mousedown',e=>{if(e.target===o&&o.id!=='formOverlay')close(o.id)}));
 document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;const lb=document.getElementById('lightbox');if(lb&&lb.classList.contains('open')){lb.classList.remove('open');return}document.querySelectorAll('.overlay.open').forEach(o=>close(o.id))});
 
 /* ============ Wire up ============ */
@@ -730,9 +784,8 @@ document.getElementById('search').oninput=e=>{query=e.target.value;render()};
 document.querySelector('#formOverlay details').addEventListener('toggle',e=>{if(e.target.open)growAll()});
 
 setupDropZone();
-render();
-if(CONFIGURED){refresh();subscribeRealtime();}
-else{showConfigBanner();}
+if(CONFIGURED){refresh({bar:true});subscribeRealtime();}
+else{render();showConfigBanner();}
 </script>
 </body>
 </html>
